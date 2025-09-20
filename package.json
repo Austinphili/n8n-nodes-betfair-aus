@@ -29,10 +29,10 @@
   "scripts": {
     "build": "tsc && gulp build:icons",
     "dev": "nodemon",
-    "format": "prettier --write nodes credentials",
-    "lint": "eslint nodes credentials --ext .js,.ts",
-    "lintfix": "eslint nodes credentials --ext .js,.ts --fix",
-    "prepublishOnly": "npm run build && npm run lint -c .eslintrc.prepublish.js nodes credentials --ext .js,.ts"
+    "format": "prettier --write *.ts",
+    "lint": "eslint *.ts",
+    "lintfix": "eslint *.ts --fix",
+    "prepublishOnly": "npm run build && npm run lint"
   },
   "files": [
     "dist"
