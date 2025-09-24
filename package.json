@@ -6,14 +6,14 @@
     "n8n-community-node-package"
   ],
   "license": "MIT",
-  "homepage": "",
+  "homepage": "https://github.com/Austinphili/n8n-nodes-betfair-aus#readme",
   "author": {
-    "name": "",
-    "email": ""
+    "name": "Austinphili",
+    "email": "99106722+Austinphili@users.noreply.github.com"
   },
   "repository": {
     "type": "git",
-    "url": ""
+    "url": "git+https://github.com/Austinphili/n8n-nodes-betfair-aus.git"
   },
   "main": "dist/index.js",
   "n8n": {
