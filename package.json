@@ -1,6 +1,6 @@
 {
   "name": "n8n-nodes-betfair-aus",
-  "version": "0.2.2",
+  "version": "0.2.3",
   "description": "n8n community node for Betfair Australia",
   "keywords": [
     "n8n-community-node-package",
@@ -22,15 +22,7 @@
   },
   "main": "dist/index.js",
   "n8n": {
-    "n8nNodesApiVersion": 1,
-    "credentials": [
-      "dist/BetfairAusCredentials.credentials.js"
-    ],
-    "nodes": [
-      "dist/BetfairAus.node.js",
-      "dist/BetfairAusPlaceBet.node.js",
-      "dist/ToolBetfair.node.js"
-    ]
+    "n8nNodesApiVersion": 1
   },
   "scripts": {
     "build": "tsc && gulp build:icons",
@@ -44,6 +36,7 @@
     "dist"
   ],
   "dependencies": {
+    "@langchain/core": "^0.2.12",
     "axios": "^1.7.2",
     "langchain": "^0.0.123"
   },
