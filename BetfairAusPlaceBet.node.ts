@@ -1,47 +1,11 @@
 import {
     IExecuteFunctions,
     INodeExecutionData,
-    INodeProperties,
     INodeType,
     INodeTypeDescription,
     NodeOperationError,
 } from 'n8n-workflow';
-import axios, { AxiosRequestConfig, AxiosResponse } from 'axios';
-
-// Betfair API Endpoints
-const BETFAIR_API_LOGIN_URL = 'https://identitysso.betfair.com.au/api/login';
-const BETFAIR_API_BASE_URL_AU = 'https://api.betfair.com.au/exchange/betting/rest/v1.0/';
-
-// Re-usable API request helper
-async function betfairApiRequest(
-    this: IExecuteFunctions,
-    endpoint: string,
-    body: object,
-    appKey: string,
-    sessionToken: string,
-): Promise<AxiosResponse> {
-    const options: AxiosRequestConfig = {
-        url: `${BETFAIR_API_BASE_URL_AU}${endpoint}`,
-        method: 'POST',
-        headers: {
-            'X-Application': appKey,
-            'X-Authentication': sessionToken,
-            'Content-Type': 'application/json',
-            'Accept': 'application/json',
-        },
-        data: body,
-        timeout: 15000,
-    };
-    try {
-        return await axios(options);
-    } catch (error) {
-        if (axios.isAxiosError(error) && error.response) {
-            console.error('Betfair API Error Response Data:', JSON.stringify(error.response.data, null, 2));
-            throw new NodeOperationError(this.getNode(), `Betfair API Error: ${JSON.stringify(error.response.data)} (Status: ${error.response.status})`);
-        }
-        throw new NodeOperationError(this.getNode(), `Betfair API Request Failed: ${(error as Error).message}`);
-    }
-}
+import { betfairApiRequest, betfairLogin } from './BetfairApiHelper';
 
 export class BetfairAusPlaceBet implements INodeType {
     description: INodeTypeDescription = {
@@ -146,20 +110,7 @@ export class BetfairAusPlaceBet implements INodeType {
         const username = credentials.username as string;
         const password = credentials.password as string;
 
-        // Login to get a session token for this execution
-        let sessionToken: string;
-        try {
-            const loginPayload = `username=${encodeURIComponent(username)}&password=${encodeURIComponent(password)}`;
-            const loginResponse = await axios.post(BETFAIR_API_LOGIN_URL, loginPayload, {
-                headers: { 'X-Application': appKey, 'Content-Type': 'application/x-www-form-urlencoded' },
-            });
-            if (!loginResponse.data?.token) {
-                throw new NodeOperationError(this.getNode(), `Betfair login failed: ${loginResponse.data?.error || 'No token received'}`);
-            }
-            sessionToken = loginResponse.data.token;
-        } catch (error) {
-            throw new NodeOperationError(this.getNode(), `Betfair login request failed: ${(error as Error).message}`);
-        }
+        const sessionToken = await betfairLogin(appKey, username, password, () => this.getNode());
 
         for (let i = 0; i < items.length; i++) {
             try {
@@ -195,7 +146,7 @@ export class BetfairAusPlaceBet implements INodeType {
                     customerStrategyRef: customerStrategyRef,
                 };
 
-                const response = await betfairApiRequest.call(this, 'placeOrders/', requestBody, appKey, sessionToken);
+                const response = await betfairApiRequest('placeOrders/', requestBody, appKey, sessionToken, () => this.getNode());
 
                 returnData.push({ json: response.data, pairedItem: { item: i } });
 

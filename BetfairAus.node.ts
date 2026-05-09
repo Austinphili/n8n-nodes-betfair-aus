@@ -1,47 +1,12 @@
 import {
     IExecuteFunctions,
     INodeExecutionData,
-    INodeProperties,
     INodeType,
     INodeTypeDescription,
     NodeOperationError,
 } from 'n8n-workflow';
-import axios, { AxiosRequestConfig, AxiosResponse } from 'axios';
-
-// Betfair API Endpoints
-const BETFAIR_API_LOGIN_URL = 'https://identitysso.betfair.com.au/api/login';
-const BETFAIR_API_BASE_URL_AU = 'https://api.betfair.com.au/exchange/betting/rest/v1.0/';
-
-// Helper function to make authenticated API calls
-async function betfairApiRequest(
-    this: IExecuteFunctions,
-    endpoint: string,
-    body: object,
-    appKey: string,
-    sessionToken: string,
-): Promise<AxiosResponse> {
-    const options: AxiosRequestConfig = {
-        url: `${BETFAIR_API_BASE_URL_AU}${endpoint}`,
-        method: 'POST',
-        headers: {
-            'X-Application': appKey,
-            'X-Authentication': sessionToken,
-            'Content-Type': 'application/json',
-            'Accept': 'application/json',
-        },
-        data: body,
-        timeout: 15000,
-    };
-    try {
-        return await axios(options);
-    } catch (error) {
-        if (axios.isAxiosError(error) && error.response) {
-            console.error('Betfair API Error Response Data:', JSON.stringify(error.response.data, null, 2));
-            throw new NodeOperationError(this.getNode(), `Betfair API Error: ${JSON.stringify(error.response.data)} (Status: ${error.response.status})`);
-        }
-        throw new NodeOperationError(this.getNode(), `Betfair API Request Failed: ${(error as Error).message}`);
-    }
-}
+import { AxiosResponse } from 'axios';
+import { betfairApiRequest, betfairLogin } from './BetfairApiHelper';
 
 export class BetfairAus implements INodeType {
     description: INodeTypeDescription = {
@@ -120,25 +85,27 @@ export class BetfairAus implements INodeType {
 					{ displayName: 'In-Play Enabled Only', name: 'filterTurnInPlayEnabled', type: 'boolean', default: false, description: 'Return only markets that will turn in-play.' },
 					{ displayName: 'In-Play Now Only', name: 'filterInPlayOnly', type: 'boolean', default: false, description: 'Return only markets that are currently in-play.' },
 					{
-						displayName: 'Market Betting Type',
-						name: 'filterMarketBettingTypes',
-						type: 'options',
-						default: 'ODDS',
-						options: [
-							{ name: 'Odds', value: 'ODDS' },
-							{ name: 'Line', value: 'LINE' },
+					displayName: 'Market Betting Type',
+					name: 'filterMarketBettingTypes',
+					type: 'options',
+					default: 'NO_FILTER',
+					options: [
+						{ name: 'No Filter', value: 'NO_FILTER' },
+						{ name: 'Odds', value: 'ODDS' },
+						{ name: 'Line', value: 'LINE' },
 							{ name: 'Asian Handicap Double Line', value: 'ASIAN_HANDICAP_DOUBLE_LINE' },
 							{ name: 'Asian Handicap Single Line', value: 'ASIAN_HANDICAP_SINGLE_LINE' },
 						]
 					},
 					{
-						displayName: 'With Orders',
-						name: 'filterWithOrders',
-						type: 'options',
-						default: 'EXECUTABLE',
-						options: [
-							{ name: 'Pending', value: 'PENDING' },
-							{ name: 'Execution Complete', value: 'EXECUTION_COMPLETE' },
+					displayName: 'With Orders',
+					name: 'filterWithOrders',
+					type: 'options',
+					default: 'NO_FILTER',
+					options: [
+						{ name: 'No Filter', value: 'NO_FILTER' },
+						{ name: 'Pending', value: 'PENDING' },
+						{ name: 'Execution Complete', value: 'EXECUTION_COMPLETE' },
 							{ name: 'Executable', value: 'EXECUTABLE' },
 							{ name: 'Expired', value: 'EXPIRED' },
 						]
@@ -222,25 +189,7 @@ export class BetfairAus implements INodeType {
         const username = credentials.username as string;
         const password = credentials.password as string;
 
-        let sessionToken: string;
-        try {
-            const loginPayload = `username=${encodeURIComponent(username)}&password=${encodeURIComponent(password)}`;
-            const loginResponse = await axios.post(BETFAIR_API_LOGIN_URL, loginPayload, {
-                headers: { 'X-Application': appKey, 'Content-Type': 'application/x-www-form-urlencoded', 'Accept': 'application/json' },
-                timeout: 10000,
-            });
-            if (loginResponse.data?.token) {
-                sessionToken = loginResponse.data.token;
-            } else {
-                throw new NodeOperationError(this.getNode(), `Betfair login failed: ${loginResponse.data?.error || loginResponse.data?.loginStatus || 'No token received'}`);
-            }
-        } catch (error) {
-            if (error instanceof NodeOperationError) throw error;
-            if (axios.isAxiosError(error) && error.response) {
-                throw new NodeOperationError(this.getNode(), `Betfair login API error: ${JSON.stringify(error.response.data)}`);
-            }
-            throw new NodeOperationError(this.getNode(), `Betfair login request error: ${(error as Error).message}`);
-        }
+        const sessionToken = await betfairLogin(appKey, username, password, () => this.getNode());
 
         const executionItems = inputItems.length > 0 ? inputItems : [{ json: {} }];
 
@@ -274,8 +223,8 @@ export class BetfairAus implements INodeType {
 					if (filterOptions.filterTurnInPlayEnabled) filter.turnInPlayEnabled = true;
 					if (filterOptions.filterInPlayOnly) filter.inPlayOnly = true;
 
-					if (filterOptions.filterMarketBettingTypes) filter.marketBettingTypes = [filterOptions.filterMarketBettingTypes];
-					if (filterOptions.filterWithOrders) filter.withOrders = [filterOptions.filterWithOrders];
+					if (filterOptions.filterMarketBettingTypes && filterOptions.filterMarketBettingTypes !== 'NO_FILTER') filter.marketBettingTypes = [filterOptions.filterMarketBettingTypes];
+					if (filterOptions.filterWithOrders && filterOptions.filterWithOrders !== 'NO_FILTER') filter.withOrders = [filterOptions.filterWithOrders];
 					if (filterOptions.filterRaceTypes && filterOptions.filterRaceTypes !== 'NO_VALUE') filter.raceTypes = [filterOptions.filterRaceTypes];
 
 					if (filterOptions.filterMarketStartFrom || filterOptions.filterMarketStartTo) {
@@ -344,7 +293,7 @@ export class BetfairAus implements INodeType {
                 }
 
                 // Make the API call
-                response = await betfairApiRequest.call(this, endpoint, requestBody, appKey, sessionToken);
+                response = await betfairApiRequest(endpoint, requestBody, appKey, sessionToken, () => this.getNode());
 
                 // Process the response
                 const apiResponseData = response.data;

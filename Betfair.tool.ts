@@ -3,44 +3,9 @@ import {
 	ISupplyDataFunctions,
 	NodeOperationError,
 } from 'n8n-workflow';
-import { Tool } from 'langchain/tools';
-import axios, { AxiosRequestConfig, AxiosResponse } from 'axios';
-
-// --- Betfair API helper functions ---
-const BETFAIR_API_LOGIN_URL = 'https://identitysso.betfair.com.au/api/login';
-const BETFAIR_API_BASE_URL_AU = 'https://api.betfair.com.au/exchange/betting/rest/v1.0/';
-
-async function betfairApiRequest(
-    this: ISupplyDataFunctions, // Context updated to the correct type
-    method: 'POST',
-    endpoint: string,
-    body: object,
-    appKey: string,
-    sessionToken: string,
-): Promise<AxiosResponse> {
-    const options: AxiosRequestConfig = {
-        url: `${BETFAIR_API_BASE_URL_AU}${endpoint}`,
-        method,
-        headers: {
-            'X-Application': appKey,
-            'X-Authentication': sessionToken,
-            'Content-Type': 'application/json',
-            'Accept': 'application/json',
-        },
-        data: body,
-        timeout: 15000,
-    };
-    try {
-        const response = await axios(options);
-        return response;
-    } catch (error) {
-        if (axios.isAxiosError(error) && error.response) {
-            throw new NodeOperationError(this.getNode(), `Betfair API Error: ${JSON.stringify(error.response.data)}`);
-        }
-        throw new NodeOperationError(this.getNode(), `Betfair API Request Failed: ${(error as Error).message}`);
-    }
-}
-// --- End of helper functions ---
+import { Tool } from '@langchain/core/tools';
+import { AxiosResponse } from 'axios';
+import { betfairApiRequest, betfairLogin } from './BetfairApiHelper';
 
 
 export class BetfairTool extends Tool {
@@ -77,15 +42,7 @@ export class BetfairTool extends Tool {
 
 		let sessionToken: string;
 		try {
-			const loginPayload = `username=${encodeURIComponent(username as string)}&password=${encodeURIComponent(password as string)}`;
-			const loginResponse = await axios.post(BETFAIR_API_LOGIN_URL, loginPayload, {
-				headers: { 'X-Application': appKey as string, 'Content-Type': 'application/x-www-form-urlencoded', 'Accept': 'application/json' },
-				timeout: 10000,
-			});
-			if (!loginResponse.data || !loginResponse.data.token) {
-				return `Login failed: ${JSON.stringify(loginResponse.data)}`;
-			}
-			sessionToken = loginResponse.data.token;
+			sessionToken = await betfairLogin(appKey as string, username as string, password as string, () => this.executionContext.getNode());
 		} catch (error) {
 			return `Error during Betfair login: ${(error as Error).message}`;
 		}
@@ -99,17 +56,17 @@ export class BetfairTool extends Tool {
 			switch (command) {
 				case 'list_events':
 					requestBody = { filter: { eventTypeIds: [argument] } };
-					response = await betfairApiRequest.call(this.executionContext, 'POST', 'listEvents/', requestBody, appKey as string, sessionToken);
+					response = await betfairApiRequest('listEvents/', requestBody, appKey as string, sessionToken, () => this.executionContext.getNode());
 					break;
 
 				case 'list_market_catalogue':
 					requestBody = { filter: { eventIds: [argument] }, maxResults: 50, marketProjection: ['MARKET_START_TIME', 'RUNNER_DESCRIPTION', 'EVENT'] };
-					response = await betfairApiRequest.call(this.executionContext, 'POST', 'listMarketCatalogue/', requestBody, appKey as string, sessionToken);
+					response = await betfairApiRequest('listMarketCatalogue/', requestBody, appKey as string, sessionToken, () => this.executionContext.getNode());
 					break;
 
 				case 'list_market_book':
 					requestBody = { marketIds: [argument], priceProjection: { priceData: ['EX_BEST_OFFERS'] } };
-					response = await betfairApiRequest.call(this.executionContext, 'POST', 'listMarketBook/', requestBody, appKey as string, sessionToken);
+					response = await betfairApiRequest('listMarketBook/', requestBody, appKey as string, sessionToken, () => this.executionContext.getNode());
 					break;
 
 				default:

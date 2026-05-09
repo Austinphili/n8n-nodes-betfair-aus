@@ -16,7 +16,7 @@ export class ToolBetfair implements INodeType {
 		group: ['transform'], // Sticking with a known valid group
 		version: 1,
 		description: 'Provides a LangChain tool for interacting with the Betfair Australia API',
-		subtitle: '={{$o.name}}',
+
 		defaults: {
 			name: 'Betfair Tool',
 		},
