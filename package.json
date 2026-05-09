@@ -1,0 +1,58 @@
+{
+  "name": "n8n-nodes-betfair-aus",
+  "version": "0.3.5",
+  "description": "n8n community node for Betfair Australia",
+  "keywords": [
+    "n8n-community-node-package"
+  ],
+  "license": "MIT",
+  "homepage": "",
+  "author": {
+    "name": "Austinphili",
+    "email": "99106722+Austinphili@users.noreply.github.com"
+  },
+  "repository": {
+    "type": "git",
+    "url": ""
+  },
+  "main": "",
+  "n8n": {
+    "n8nNodesApiVersion": 1,
+    "credentials": [
+      "dist/BetfairAusCredentials.credentials.js"
+    ],
+    "nodes": [
+      "dist/BetfairAus.node.js",
+      "dist/BetfairAusPlaceBet.node.js",
+      "dist/ToolBetfair.node.js"
+    ]
+  },
+  "scripts": {
+    "build": "tsc && gulp build:icons",
+    "dev": "nodemon",
+    "format": "prettier --write *.ts",
+    "lint": "eslint *.ts",
+    "lintfix": "eslint *.ts --fix",
+    "prepublishOnly": "npm run build && npm run lint"
+  },
+  "files": [
+    "dist"
+  ],
+  "dependencies": {
+    "@langchain/core": "^0.2.12",
+    "axios": "^1.7.2"
+  },
+  "devDependencies": {
+    "@types/express": "^4.17.13",
+    "@types/node": "^18.19.41",
+    "@typescript-eslint/parser": "^5.29.0",
+    "eslint": "^8.18.0",
+    "gulp": "^4.0.2",
+    "n8n-node-dev": "^1.10.0",
+    "n8n-workflow": "*",
+    "nodemon": "^3.1.4",
+    "prettier": "^2.7.1",
+    "tslib": "~2.6.3",
+    "typescript": "~5.4.5"
+  }
+}

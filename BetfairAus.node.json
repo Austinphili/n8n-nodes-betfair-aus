@@ -1,0 +1,375 @@
+import {
+    IExecuteFunctions,
+    INodeExecutionData,
+    INodeProperties, // Ensure this is imported
+    INodeType,
+    INodeTypeDescription,
+    NodeOperationError,
+} from 'n8n-workflow';
+import axios, { AxiosRequestConfig, AxiosResponse } from 'axios';
+
+// Betfair API Endpoints
+const BETFAIR_API_LOGIN_URL = 'https://identitysso.betfair.com.au/api/login';
+const BETFAIR_API_BASE_URL_AU = 'https://api.betfair.com.au/exchange/betting/rest/v1.0/';
+
+// Helper function to make authenticated API calls
+async function betfairApiRequest(
+    this: IExecuteFunctions,
+    method: 'POST',
+    endpoint: string,
+    body: object,
+    appKey: string,
+    sessionToken: string,
+): Promise<AxiosResponse> {
+    const options: AxiosRequestConfig = {
+        url: `${BETFAIR_API_BASE_URL_AU}${endpoint}`,
+        method,
+        headers: {
+            'X-Application': appKey,
+            'X-Authentication': sessionToken,
+            'Content-Type': 'application/json',
+            'Accept': 'application/json',
+        },
+        data: body,
+        timeout: 15000,
+    };
+    try {
+        const response = await axios(options);
+        return response;
+    } catch (error) {
+        if (axios.isAxiosError(error) && error.response) {
+            console.error('Betfair API Axios Error Response Data:', JSON.stringify(error.response.data, null, 2));
+            console.error('Betfair API Axios Error Response Status:', error.response.status);
+            throw new NodeOperationError(this.getNode(), `Betfair API Error: ${JSON.stringify(error.response.data)} - Status: ${error.response.status}`);
+        }
+        throw new NodeOperationError(this.getNode(), `Betfair API Request Failed: ${(error as Error).message}`);
+    }
+}
+
+export class BetfairAus implements INodeType {
+    description: INodeTypeDescription = {
+        displayName: 'Betfair Australia',
+        name: 'betfairAus',
+        icon: 'file:betfair.svg', // Make sure betfair.svg is in the same directory or update path
+        group: ['transform'],
+        version: 1,
+        subtitle: '={{$parameter["operation"]}}',
+        description: 'Interact with the Betfair Australia API',
+        defaults: {
+            name: 'Betfair AU',
+        },
+        inputs: ['main'],
+        outputs: ['main'],
+        credentials: [
+            {
+                name: 'betfairAusApi',
+                required: true,
+            },
+        ],
+        properties: [
+            // 1. Resource Selection
+            {
+                displayName: 'Resource',
+                name: 'resource',
+                type: 'options',
+                noDataExpression: true,
+                options: [
+                    { name: 'Event', value: 'event' },
+                    { name: 'Market', value: 'market' },
+                    { name: 'Orders', value: 'orders' },
+                ],
+                default: 'event',
+            },
+            // 2. Operation Selection
+            {
+                displayName: 'Operation',
+                name: 'operation',
+                type: 'options',
+                noDataExpression: true,
+                default: 'listEventTypes',
+                options: [
+                    { name: 'List Event Types', value: 'listEventTypes', action: 'List event types' },
+                    { name: 'List Events', value: 'listEvents', action: 'List events for a type' },
+                    { name: 'List Market Book(s)', value: 'listMarketBook', action: 'List market book s' },
+                    { name: 'List Market Catalogue', value: 'listMarketCatalogue', action: 'List market catalogue' },
+                    { name: 'List Current Orders', value: 'listCurrentOrders', action: 'List current orders', description: 'Retrieves current orders' },
+                ],
+            },
+            // Parameters for Event -> List Events
+            {
+                displayName: 'Event Type ID', name: 'eventTypeId', type: 'string', default: '', required: true, placeholder: 'e.g., 1, 7', description: 'Comma-separated Event Type IDs.', displayOptions: { show: { resource: ['event'], operation: ['listEvents'] } },
+            },
+            // Parameters for Market -> List Market Book(s)
+            {
+                displayName: 'Market IDs (for Market Book)', name: 'marketIds', type: 'string', default: '', required: true, placeholder: 'e.g., 1.123...,1.456...', description: 'Comma-separated Market IDs.', displayOptions: { show: { resource: ['market'], operation: ['listMarketBook'] } },
+            },
+            {
+                displayName: 'Price Data (for Market Book)', name: 'priceProjectionPriceData', type: 'options', default: 'EX_BEST_OFFERS', description: 'Select price data to return.', displayOptions: { show: { resource: ['market'], operation: ['listMarketBook'] } }, options: [ { name: 'Best Offers (EX_BEST_OFFERS)', value: 'EX_BEST_OFFERS' }, { name: 'All Offers (EX_ALL_OFFERS)', value: 'EX_ALL_OFFERS' }, { name: 'Traded Volume (EX_TRADED)', value: 'EX_TRADED' } ]
+            },
+            {
+                displayName: 'Best Offers Depth (for Market Book)', name: 'priceProjectionExBestOffersDepth', type: 'number', typeOptions: { minValue: 1 }, default: 3, description: 'Depth of best prices if EX_BEST_OFFERS is chosen.', displayOptions: { show: { resource: ['market'], operation: ['listMarketBook'] } }
+            },
+            {
+                displayName: 'Virtualise Prices? (for Market Book)', name: 'priceProjectionVirtualise', type: 'boolean', default: false, description: 'Include virtual prices.', displayOptions: { show: { resource: ['market'], operation: ['listMarketBook'] } }
+            },
+            {
+                displayName: 'Order Projection (for Market Book)', name: 'orderProjection', type: 'options', default: 'ALL', description: 'Projection of your orders.', displayOptions: { show: { resource: ['market'], operation: ['listMarketBook'] } }, options: [ { name: 'All My Orders (ALL)', value: 'ALL' }, { name: 'My Executable Orders (EXECUTABLE)', value: 'EXECUTABLE' }, { name: 'My Execution Complete Orders (EXECUTION_COMPLETE)', value: 'EXECUTION_COMPLETE' }, { name: 'Do Not Include Orders (Omit)', value: 'OMIT' } ]
+            },
+            {
+                displayName: 'Match Projection (for Market Book)', name: 'matchProjection', type: 'options', default: 'NO_ROLLUP', description: 'Projection of matched bets.', displayOptions: { show: { resource: ['market'], operation: ['listMarketBook'] } }, options: [ { name: 'No Rollup (NO_ROLLUP)', value: 'NO_ROLLUP' }, { name: 'Rolled Up by Price (ROLLED_UP_BY_PRICE)', value: 'ROLLED_UP_BY_PRICE' }, { name: 'Rolled Up by Average Price (ROLLED_UP_BY_AVG_PRICE)', value: 'ROLLED_UP_BY_AVG_PRICE' }, { name: 'Do Not Include Matches (Omit)', value: 'OMIT' } ]
+            },
+            {
+                displayName: 'Filter by Bet IDs (for Market Book - Optional)', name: 'betIds', type: 'string', default: '', placeholder: 'e.g., 12345,67890', description: 'Comma-separated list of your bet IDs.', displayOptions: { show: { resource: ['market'], operation: ['listMarketBook'] } }
+            },
+            {
+                displayName: 'Currency Code (for Market Book - Optional)', name: 'currencyCodeMarketBook', type: 'string', default: '', placeholder: 'e.g., AUD, GBP', displayOptions: { show: { resource: ['market'], operation: ['listMarketBook'] } }
+            },
+            {
+                displayName: 'Locale (for Market Book - Optional)', name: 'localeMarketBook', type: 'string', default: '', placeholder: 'e.g., en_AU, en_US', displayOptions: { show: { resource: ['market'], operation: ['listMarketBook'] } }
+            },
+            // Parameters for Market -> List Market Catalogue
+            {
+                displayName: 'Filter: Event Type IDs', name: 'filterEventTypeIds', type: 'string', default: '', placeholder: 'e.g., 1,7', description: 'Comma-separated Event Type IDs.', displayOptions: { show: { resource: ['market'], operation: ['listMarketCatalogue'] } }
+            },
+            {
+                displayName: 'Filter: Event IDs', name: 'filterEventIds', type: 'string', default: '', placeholder: 'e.g., 2012345,2012346', description: 'Comma-separated Event IDs.', displayOptions: { show: { resource: ['market'], operation: ['listMarketCatalogue'] } }
+            },
+            {
+                displayName: 'Filter: Market Type Codes', name: 'filterMarketTypeCodes', type: 'string', default: '', placeholder: 'e.g., MATCH_ODDS,OVER_UNDER_25', description: 'Comma-separated Market Type Codes.', displayOptions: { show: { resource: ['market'], operation: ['listMarketCatalogue'] } }
+            },
+            {
+                displayName: 'Filter: Text Query', name: 'filterTextQuery', type: 'string', default: '', description: 'Free-text search string.', displayOptions: { show: { resource: ['market'], operation: ['listMarketCatalogue'] } }
+            },
+            {
+                displayName: 'Market Data to Return', name: 'marketProjection', type: 'multiOptions', default: ['EVENT', 'MARKET_START_TIME', 'RUNNER_DESCRIPTION'], description: 'Data fields to return for markets.', options: [ { name: 'Competition', value: 'COMPETITION' }, { name: 'Event', value: 'EVENT' }, { name: 'Event Type', value: 'EVENT_TYPE' }, { name: 'Market Description', value: 'MARKET_DESCRIPTION' }, { name: 'Market Start Time', value: 'MARKET_START_TIME' }, { name: 'Runner Description', value: 'RUNNER_DESCRIPTION' }, { name: 'Runner Metadata', value: 'RUNNER_METADATA' } ], displayOptions: { show: { resource: ['market'], operation: ['listMarketCatalogue'] } }
+            },
+            {
+                displayName: 'Sort Order', name: 'sort', type: 'options', default: 'FIRST_TO_START', description: 'Sort order for market catalogues.', options: [ { name: 'First to Start', value: 'FIRST_TO_START' }, { name: 'Last to Start', value: 'LAST_TO_START' }, { name: 'Minimum Available Liquidity', value: 'MINIMUM_AVAILABLE' }, { name: 'Maximum Available Liquidity', value: 'MAXIMUM_AVAILABLE' }, { name: 'Minimum Traded Volume', value: 'MINIMUM_TRADED' }, { name: 'Maximum Traded Volume', value: 'MAXIMUM_TRADED' } ], displayOptions: { show: { resource: ['market'], operation: ['listMarketCatalogue'] } }
+            },
+            {
+                displayName: 'Max Results', name: 'maxResults', type: 'number', default: 100, typeOptions: { minValue: 1, maxValue: 1000 }, description: 'Maximum market catalogues to return.', displayOptions: { show: { resource: ['market'], operation: ['listMarketCatalogue'] } }
+            },
+            // Parameters for Orders -> List Current Orders
+            {
+                displayName: 'Market IDs (Orders Filter)', name: 'currentOrdersMarketIds', type: 'string', default: '', placeholder: 'e.g., 1.12345,1.67890', description: 'Comma-separated Market IDs.', displayOptions: { show: { resource: ['orders'], operation: ['listCurrentOrders'] } },
+            },
+            {
+                displayName: 'Bet IDs (Orders Filter)', name: 'currentOrdersBetIds', type: 'string', default: '', placeholder: 'e.g., 1234567890,...', description: 'Comma-separated Bet IDs.', displayOptions: { show: { resource: ['orders'], operation: ['listCurrentOrders'] } },
+            },
+            {
+                displayName: 'Order Projection (Current Orders)', name: 'currentOrdersOrderProjection', type: 'options', default: 'EXECUTABLE', description: 'Type of orders to return.', options: [ { name: 'All Orders (ALL)', value: 'ALL' }, { name: 'Executable Orders (EXECUTABLE)', value: 'EXECUTABLE' }, { name: 'Execution Complete Orders (EXECUTION_COMPLETE)', value: 'EXECUTION_COMPLETE' } ], displayOptions: { show: { resource: ['orders'], operation: ['listCurrentOrders'] } },
+            },
+            {
+                displayName: 'Placed Date From (Orders Filter)', name: 'currentOrdersPlacedDateFrom', type: 'dateTime', default: '', displayOptions: { show: { resource: ['orders'], operation: ['listCurrentOrders'] } },
+            },
+            {
+                displayName: 'Placed Date To (Orders Filter)', name: 'currentOrdersPlacedDateTo', type: 'dateTime', default: '', displayOptions: { show: { resource: ['orders'], operation: ['listCurrentOrders'] } },
+            },
+            {
+                displayName: 'Order By (Current Orders)', name: 'currentOrdersOrderBy', type: 'options', default: 'BY_PLACE_TIME', options: [ { name: 'By Bet ID (BY_BET)', value: 'BY_BET' }, { name: 'By Market (BY_MARKET)', value: 'BY_MARKET' }, { name: 'By Match Time (BY_MATCH_TIME)', value: 'BY_MATCH_TIME' }, { name: 'By Place Time (BY_PLACE_TIME)', value: 'BY_PLACE_TIME' }, { name: 'By Settled Time (BY_SETTLED_TIME)', value: 'BY_SETTLED_TIME' }, { name: 'By Void Time (BY_VOID_TIME)', value: 'BY_VOID_TIME' } ], displayOptions: { show: { resource: ['orders'], operation: ['listCurrentOrders'] } },
+            },
+            {
+                displayName: 'Sort Direction (Current Orders)', name: 'currentOrdersSortDir', type: 'options', default: 'LATEST_TO_EARLIEST', options: [ { name: 'Latest to Earliest (LATEST_TO_EARLIEST)', value: 'LATEST_TO_EARLIEST' }, { name: 'Earliest to Latest (EARLIEST_TO_LATEST)', value: 'EARLIEST_TO_LATEST' } ], displayOptions: { show: { resource: ['orders'], operation: ['listCurrentOrders'] } },
+            },
+            {
+                displayName: 'From Record (Pagination)', name: 'currentOrdersFromRecord', type: 'number', default: 0, typeOptions: { minValue: 0 }, displayOptions: { show: { resource: ['orders'], operation: ['listCurrentOrders'] } },
+            },
+            {
+                displayName: 'Record Count (Pagination)', name: 'currentOrdersRecordCount', type: 'number', default: 100, typeOptions: { minValue: 1, maxValue: 1000 }, displayOptions: { show: { resource: ['orders'], operation: ['listCurrentOrders'] } },
+            },
+        ],
+    };
+
+    private static sessionToken: string | null = null;
+    private static tokenExpiry: Date | null = null;
+
+    async execute(this: IExecuteFunctions): Promise<INodeExecutionData[][]> {
+        const inputItems = this.getInputData();
+        let returnData: INodeExecutionData[] = [];
+
+        const credentials = await this.getCredentials('betfairAusApi');
+        if (!credentials) {
+            throw new NodeOperationError(this.getNode(), 'No credentials found. Please add Betfair Australia API credentials.');
+        }
+        const appKey = credentials.appKey as string;
+        const username = credentials.username as string;
+        const password = credentials.password as string;
+
+        const resource = this.getNodeParameter('resource', 0) as string;
+        const operation = this.getNodeParameter('operation', 0) as string;
+
+        const now = new Date();
+        if (!BetfairAus.sessionToken || (BetfairAus.tokenExpiry && now >= BetfairAus.tokenExpiry)) {
+            console.log('Session token is missing or expired. Attempting login...');
+            try {
+                const loginPayload = `username=${encodeURIComponent(username)}&password=${encodeURIComponent(password)}`;
+                const loginResponse = await axios.post(BETFAIR_API_LOGIN_URL, loginPayload, {
+                    headers: {
+                        'X-Application': appKey,
+                        'Content-Type': 'application/x-www-form-urlencoded',
+                        'Accept': 'application/json',
+                    },
+                    timeout: 10000,
+                });
+
+                if (loginResponse.data && loginResponse.data.token) {
+                    BetfairAus.sessionToken = loginResponse.data.token;
+                    BetfairAus.tokenExpiry = new Date(now.getTime() + 3 * 60 * 60 * 1000);
+                    console.log(`Betfair session token obtained. Expires: ${BetfairAus.tokenExpiry.toISOString()}`);
+                } else if (loginResponse.data && (loginResponse.data.error || loginResponse.data.loginStatus)) {
+                    const loginError = loginResponse.data.error || loginResponse.data.loginStatus;
+                    throw new NodeOperationError(this.getNode(), `Betfair login failed: ${loginError}`);
+                } else {
+                    throw new NodeOperationError(this.getNode(), 'Betfair login failed: No session token received and no specific error message.');
+                }
+            } catch (error) {
+                console.error('Betfair login attempt failed:', error);
+                if (axios.isAxiosError(error) && error.response) {
+                    throw new NodeOperationError(this.getNode(), `Betfair login API error: ${JSON.stringify(error.response.data)} (Status: ${error.response.status})`, { itemIndex: 0 });
+                } else if (error instanceof NodeOperationError) {
+                    throw error;
+                }
+                throw new NodeOperationError(this.getNode(), `Betfair login request error: ${(error as Error).message}`, { itemIndex: 0 });
+            }
+        }
+
+        if (!BetfairAus.sessionToken) {
+            throw new NodeOperationError(this.getNode(), 'Could not obtain or use Betfair session token.');
+        }
+
+        const executionItems = inputItems.length > 0 ? inputItems : [{ json: {} }];
+
+        for (let itemIndex = 0; itemIndex < executionItems.length; itemIndex++) {
+            try {
+                let response: AxiosResponse;
+                let requestBody: any = {};
+
+                if (resource === 'event') {
+                    if (operation === 'listEventTypes') {
+                        requestBody = { filter: {} };
+                        response = await betfairApiRequest.call(this, 'POST', 'listEventTypes/', requestBody, appKey, BetfairAus.sessionToken);
+                    } else if (operation === 'listEvents') {
+                        const eventTypeIdParam = this.getNodeParameter('eventTypeId', itemIndex) as string;
+                        if (!eventTypeIdParam) throw new NodeOperationError(this.getNode(), 'Event Type ID is required.', { itemIndex });
+                        requestBody = { filter: { eventTypeIds: eventTypeIdParam.split(',').map(id => id.trim()).filter(id => id) } };
+                        response = await betfairApiRequest.call(this, 'POST', 'listEvents/', requestBody, appKey, BetfairAus.sessionToken);
+                    } else {
+                        throw new NodeOperationError(this.getNode(), `Unsupported operation '${operation}' for event resource.`, { itemIndex });
+                    }
+                } else if (resource === 'market') {
+                    if (operation === 'listMarketBook') {
+                        const marketIdsRaw = this.getNodeParameter('marketIds', itemIndex) as string;
+                        if (!marketIdsRaw || marketIdsRaw.trim() === '') throw new NodeOperationError(this.getNode(), 'Market IDs are required.', { itemIndex });
+                        requestBody.marketIds = marketIdsRaw.split(',').map(id => id.trim()).filter(id => id);
+
+                        const priceData = this.getNodeParameter('priceProjectionPriceData', itemIndex) as string | undefined;
+                        const bestPricesDepth = this.getNodeParameter('priceProjectionExBestOffersDepth', itemIndex, null) as number | null;
+                        const virtualise = this.getNodeParameter('priceProjectionVirtualise', itemIndex) as boolean | undefined;
+                        const orderProjectionParam = this.getNodeParameter('orderProjection', itemIndex) as string | undefined;
+                        const matchProjectionParam = this.getNodeParameter('matchProjection', itemIndex) as string | undefined;
+                        const betIdsRaw = this.getNodeParameter('betIds', itemIndex, '') as string;
+                        const currencyCodeParam = this.getNodeParameter('currencyCodeMarketBook', itemIndex, '') as string;
+                        const localeParam = this.getNodeParameter('localeMarketBook', itemIndex, '') as string;
+
+                        const priceProjection: any = {};
+                        if (priceData) priceProjection.priceData = [priceData];
+                        if (typeof virtualise === 'boolean') priceProjection.virtualise = virtualise;
+                        if (bestPricesDepth !== null && bestPricesDepth > 0) priceProjection.exBestOffersOverrides = { bestPricesDepth: bestPricesDepth };
+                        if (Object.keys(priceProjection).length > 0) requestBody.priceProjection = priceProjection;
+
+                        if (orderProjectionParam && orderProjectionParam !== 'OMIT') requestBody.orderProjection = orderProjectionParam;
+                        if (matchProjectionParam && matchProjectionParam !== 'OMIT') requestBody.matchProjection = matchProjectionParam;
+                        if (betIdsRaw.trim() !== '') requestBody.betIds = betIdsRaw.split(',').map(id => id.trim()).filter(id => id);
+                        if (currencyCodeParam.trim() !== '') requestBody.currencyCode = currencyCodeParam;
+                        if (localeParam.trim() !== '') requestBody.locale = localeParam;
+
+                        response = await betfairApiRequest.call(this, 'POST', 'listMarketBook/', requestBody, appKey, BetfairAus.sessionToken);
+                    } else if (operation === 'listMarketCatalogue') {
+                        const filter: any = {};
+                        const filterEventTypeIdsRaw = this.getNodeParameter('filterEventTypeIds', itemIndex, '') as string;
+                        if (filterEventTypeIdsRaw.trim() !== '') filter.eventTypeIds = filterEventTypeIdsRaw.split(',').map(id => id.trim()).filter(id => id);
+                        const filterEventIdsRaw = this.getNodeParameter('filterEventIds', itemIndex, '') as string;
+                        if (filterEventIdsRaw.trim() !== '') filter.eventIds = filterEventIdsRaw.split(',').map(id => id.trim()).filter(id => id);
+                        const filterMarketTypeCodesRaw = this.getNodeParameter('filterMarketTypeCodes', itemIndex, '') as string;
+                        if (filterMarketTypeCodesRaw.trim() !== '') filter.marketTypeCodes = filterMarketTypeCodesRaw.split(',').map(code => code.trim()).filter(code => code);
+                        const filterTextQuery = this.getNodeParameter('filterTextQuery', itemIndex, '') as string;
+                        if (filterTextQuery.trim() !== '') filter.textQuery = filterTextQuery;
+                        
+                        requestBody.filter = filter;
+                        requestBody.marketProjection = this.getNodeParameter('marketProjection', itemIndex, ['EVENT', 'MARKET_START_TIME', 'RUNNER_DESCRIPTION']) as string[];
+                        requestBody.sort = this.getNodeParameter('sort', itemIndex, 'FIRST_TO_START') as string;
+                        requestBody.maxResults = this.getNodeParameter('maxResults', itemIndex, 100) as number;
+
+                        response = await betfairApiRequest.call(this, 'POST', 'listMarketCatalogue/', requestBody, appKey, BetfairAus.sessionToken!);
+                    } else {
+                        throw new NodeOperationError(this.getNode(), `Unsupported operation '${operation}' for market resource.`, { itemIndex });
+                    }
+                } else if (resource === 'orders') {
+                    if (operation === 'listCurrentOrders') {
+                        const marketIdsRaw = this.getNodeParameter('currentOrdersMarketIds', itemIndex, '') as string;
+                        const betIdsRaw = this.getNodeParameter('currentOrdersBetIds', itemIndex, '') as string;
+                        const orderProjection = this.getNodeParameter('currentOrdersOrderProjection', itemIndex, 'EXECUTABLE') as string;
+                        const placedDateFrom = this.getNodeParameter('currentOrdersPlacedDateFrom', itemIndex, '') as string;
+                        const placedDateTo = this.getNodeParameter('currentOrdersPlacedDateTo', itemIndex, '') as string;
+                        const orderBy = this.getNodeParameter('currentOrdersOrderBy', itemIndex, 'BY_PLACE_TIME') as string;
+                        const sortDir = this.getNodeParameter('currentOrdersSortDir', itemIndex, 'LATEST_TO_EARLIEST') as string;
+                        const fromRecord = this.getNodeParameter('currentOrdersFromRecord', itemIndex, 0) as number;
+                        const recordCount = this.getNodeParameter('currentOrdersRecordCount', itemIndex, 100) as number;
+
+                        if (marketIdsRaw.trim() !== '') requestBody.marketIds = marketIdsRaw.split(',').map(id => id.trim()).filter(id => id);
+                        if (betIdsRaw.trim() !== '') requestBody.betIds = betIdsRaw.split(',').map(id => id.trim()).filter(id => id);
+                        if (orderProjection) requestBody.orderProjection = orderProjection;
+
+                        const placedDateRange: any = {};
+                        if (placedDateFrom) placedDateRange.from = new Date(placedDateFrom).toISOString();
+                        if (placedDateTo) placedDateRange.to = new Date(placedDateTo).toISOString();
+                        if (Object.keys(placedDateRange).length > 0) requestBody.placedDateRange = placedDateRange;
+
+                        if (orderBy) requestBody.orderBy = orderBy;
+                        if (sortDir) requestBody.sortDir = sortDir;
+                        if (fromRecord > 0) requestBody.fromRecord = fromRecord;
+                        if (recordCount > 0 ) requestBody.recordCount = recordCount;
+
+                        response = await betfairApiRequest.call( this, 'POST', 'listCurrentOrders/', requestBody, appKey, BetfairAus.sessionToken!);
+                    } else {
+                        throw new NodeOperationError(this.getNode(), `Unsupported operation '${operation}' for orders resource.`, { itemIndex });
+                    }
+                } else {
+                    throw new NodeOperationError(this.getNode(), `Unknown resource '${resource}'`, { itemIndex });
+                }
+
+                const apiResponseData = response.data;
+                const results = Array.isArray(apiResponseData) ? apiResponseData : [apiResponseData];
+                
+                results.forEach((result, resultIndex) => {
+                    if (result && typeof result === 'object' && Object.keys(result).length > 0) {
+                        const itemToPush = { json: result };
+                        // LOG EXACTLY WHAT IS BEING PUSHED
+                        console.log(`BetfairAus.node.ts: Pushing to returnData for input itemIndex ${itemIndex}, resultIndex ${resultIndex}: ${JSON.stringify(itemToPush, null, 2)}`);
+                        returnData.push(itemToPush);
+                    } else {
+                        console.warn(`BetfairAus.node.ts: API call for (resource: ${resource}, operation: ${operation}, input index: ${itemIndex}, result index: ${resultIndex}) returned problematic data. Skipping this result. Received:`, JSON.stringify(result));
+                    }
+                });
+
+            } catch (error) {
+                if (error instanceof NodeOperationError) {
+                    throw error;
+                }
+                const errorMessage = (error instanceof Error) ? error.message : JSON.stringify(error);
+                console.error(`Error executing Betfair operation for itemIndex ${itemIndex}. Raw error:`, error);
+                throw new NodeOperationError(this.getNode(), `Error executing Betfair operation: ${errorMessage}`, {
+                    itemIndex,
+                });
+            }
+        }
+        
+        console.log(`BetfairAus.node.ts: About to return. Number of items in returnData: ${returnData.length}`);
+        if (returnData.length > 0) {
+            console.log(`BetfairAus.node.ts: Structure of first item in returnData (before wrapping in outer array): ${JSON.stringify(returnData[0], null, 2)}`);
+        } else {
+            console.log(`BetfairAus.node.ts: returnData is empty. No valid items to output.`);
+        }
+        return [returnData]; 
+    }
+}
