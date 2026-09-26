@@ -1,19 +1,19 @@
 {
   "name": "n8n-nodes-betfair-aus",
-  "version": "0.3.2",
+  "version": "0.3.7",
   "description": "n8n community node for Betfair Australia",
   "keywords": [
     "n8n-community-node-package"
   ],
   "license": "MIT",
-  "homepage": "",
+  "homepage": "https://github.com/Austinphili/n8n-nodes-betfair-aus",
   "author": {
     "name": "Austinphili",
     "email": "99106722+Austinphili@users.noreply.github.com"
   },
   "repository": {
     "type": "git",
-    "url": ""
+    "url": "git+https://github.com/Austinphili/n8n-nodes-betfair-aus.git"
   },
   "main": "",
   "n8n": {
@@ -39,7 +39,7 @@
     "dist"
   ],
   "dependencies": {
-    "@langchain/core": "^0.2.12",
+    "@langchain/core": "^1.2.8",
     "axios": "^1.7.2"
   },
   "devDependencies": {
