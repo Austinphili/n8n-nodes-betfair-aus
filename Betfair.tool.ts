@@ -1,12 +1,15 @@
-import {
-	// CORRECTED: We now import ISupplyDataFunctions, the context provided by the tool node.
-	ISupplyDataFunctions,
-	NodeOperationError,
-} from 'n8n-workflow';
+import { INode, ICredentialDataDecryptedObject, NodeOperationError } from 'n8n-workflow';
 import { Tool } from '@langchain/core/tools';
 import { AxiosResponse } from 'axios';
 import { betfairApiRequest, betfairLogin } from './BetfairApiHelper';
 
+
+// The subset of the execution context the tool needs; satisfied by both
+// ISupplyDataFunctions (supplyData) and IExecuteFunctions (execute).
+export interface BetfairToolContext {
+	getCredentials(type: string): Promise<ICredentialDataDecryptedObject>;
+	getNode(): INode;
+}
 
 export class BetfairTool extends Tool {
 	name = 'betfair_australia';
@@ -20,11 +23,9 @@ export class BetfairTool extends Tool {
         - 'list_market_book:<market_id>' - to get live odds for a market.
     `;
 
-	// CORRECTED: The context is now of the type ISupplyDataFunctions.
-	private executionContext!: ISupplyDataFunctions;
+	private executionContext!: BetfairToolContext;
 
-	// CORRECTED: The parameter for this method is now ISupplyDataFunctions.
-	setExecutionContext(context: ISupplyDataFunctions) {
+	setExecutionContext(context: BetfairToolContext) {
 		this.executionContext = context;
 	}
 

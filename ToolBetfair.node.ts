@@ -1,5 +1,6 @@
 import {
-	// These are the specific types needed for a tool-providing node
+	IExecuteFunctions,
+	INodeExecutionData,
 	ISupplyDataFunctions,
 	NodeConnectionTypes,
 	SupplyData,
@@ -49,6 +50,29 @@ export class ToolBetfair implements INodeType {
 		return {
 			response: tool,
 		};
+	}
+
+	// n8n 2.x agents run tool nodes through the engine, which calls execute()
+	// with the model's tool arguments as the item JSON.
+	async execute(this: IExecuteFunctions): Promise<INodeExecutionData[][]> {
+		const tool = new BetfairTool();
+		tool.setExecutionContext(this);
+
+		const items = this.getInputData();
+		const results: INodeExecutionData[] = [];
+		for (let i = 0; i < items.length; i++) {
+			const args = items[i].json as Record<string, unknown>;
+			const raw = [args.input, args.command, args.query].find((v) => typeof v === 'string' && v) as
+				| string
+				| undefined;
+			const argument = typeof args.argument === 'string' ? args.argument : undefined;
+			const text = raw && argument !== undefined && !raw.includes(':') ? `${raw}:${argument}` : raw;
+			const response = text
+				? await tool.invoke(text)
+				: "Error: expected input like 'list_events:<event_type_id>'.";
+			results.push({ json: { response }, pairedItem: { item: i } });
+		}
+		return [results];
 	}
 }
 
