@@ -34,48 +34,40 @@ export class BetfairTool extends Tool {
 			throw new Error('Execution context not set on BetfairTool.');
 		}
 
-		// Get credentials and log in
+		// Parse and validate before logging in, so a bad command never costs a Betfair login.
+		const text = typeof input === 'string' ? input : '';
+		const sep = text.indexOf(':');
+		const command = (sep === -1 ? text : text.slice(0, sep)).trim();
+		const argument = (sep === -1 ? '' : text.slice(sep + 1)).trim();
+		const commands: Record<string, (arg: string) => { endpoint: string; body: object }> = {
+			list_events: (arg) => ({ endpoint: 'listEvents/', body: { filter: { eventTypeIds: [arg] } } }),
+			list_market_catalogue: (arg) => ({
+				endpoint: 'listMarketCatalogue/',
+				body: { filter: { eventIds: [arg] }, maxResults: 50, marketProjection: ['MARKET_START_TIME', 'RUNNER_DESCRIPTION', 'EVENT'] },
+			}),
+			list_market_book: (arg) => ({
+				endpoint: 'listMarketBook/',
+				body: { marketIds: [arg], priceProjection: { priceData: ['EX_BEST_OFFERS'] } },
+			}),
+		};
+		if (!commands[command]) {
+			return `Unknown command '${command}'. Valid commands are: list_events, list_market_catalogue, list_market_book.`;
+		}
+		if (!argument) {
+			return `Command '${command}' needs an argument, e.g. '${command}:<id>'.`;
+		}
+		const { endpoint, body } = commands[command](argument);
+
 		const credentials = await this.executionContext.getCredentials('betfairAusApi');
 		if (!credentials) {
 			return 'Error: Betfair credentials are not configured for this tool.';
 		}
 		const { appKey, username, password } = credentials;
 
-		let sessionToken: string;
 		try {
-			sessionToken = await betfairLogin(appKey as string, username as string, password as string, () => this.executionContext.getNode());
-		} catch (error) {
-			return `Error during Betfair login: ${(error as Error).message}`;
-		}
-
-		// Keyword-based router for different commands
-		const [command, argument] = input.split(':');
-		let response: AxiosResponse;
-		let requestBody: any = {};
-
-		try {
-			switch (command) {
-				case 'list_events':
-					requestBody = { filter: { eventTypeIds: [argument] } };
-					response = await betfairApiRequest('listEvents/', requestBody, appKey as string, sessionToken, () => this.executionContext.getNode());
-					break;
-
-				case 'list_market_catalogue':
-					requestBody = { filter: { eventIds: [argument] }, maxResults: 50, marketProjection: ['MARKET_START_TIME', 'RUNNER_DESCRIPTION', 'EVENT'] };
-					response = await betfairApiRequest('listMarketCatalogue/', requestBody, appKey as string, sessionToken, () => this.executionContext.getNode());
-					break;
-
-				case 'list_market_book':
-					requestBody = { marketIds: [argument], priceProjection: { priceData: ['EX_BEST_OFFERS'] } };
-					response = await betfairApiRequest('listMarketBook/', requestBody, appKey as string, sessionToken, () => this.executionContext.getNode());
-					break;
-
-				default:
-					return `Unknown command '${command}'. Valid commands are: list_events, list_market_catalogue, list_market_book.`;
-			}
-
+			const sessionToken = await betfairLogin(appKey as string, username as string, password as string, () => this.executionContext.getNode());
+			const response: AxiosResponse = await betfairApiRequest(endpoint, body, appKey as string, sessionToken, () => this.executionContext.getNode());
 			return JSON.stringify(response.data, null, 2);
-
 		} catch (error) {
 			if (error instanceof NodeOperationError) {
 				return `API Error: ${error.message}`;

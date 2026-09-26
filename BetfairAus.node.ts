@@ -43,7 +43,7 @@ export class BetfairAus implements INodeType {
                     { name: 'List Events', value: 'listEvents', action: 'List events for a sport' },
                     { name: 'List Venues', value: 'listVenues', action: 'List active horse-racing venues' },
                     { name: 'List Market Types', value: 'listMarketTypes', action: 'List market types for a sport' },
-                    { name: 'List Competitions', value: 'listCompetition', action: 'List competitions for a sport' },
+                    { name: 'List Competitions', value: 'listCompetitions', action: 'List competitions for a sport' },
                     { name: 'List Market Book(s)', value: 'listMarketBook', action: 'Get live odds for markets' },
                     { name: 'List Market Catalogue', value: 'listMarketCatalogue', action: 'Get market details and selections' },
                     { name: 'List Current Orders', value: 'listCurrentOrders', action: 'List your current bets' },
@@ -66,7 +66,7 @@ export class BetfairAus implements INodeType {
 							'listEvents',
 							'listVenues',
 							'listMarketTypes',
-							'listCompetition',
+							'listCompetitions',
 							'listMarketCatalogue',
 						],
 					},
@@ -201,12 +201,12 @@ export class BetfairAus implements INodeType {
                 const endpoint = `${operation}/`;
 
                 const getArrayParam = (name: string, collection: any) => {
-                    const raw = collection[name] || '';
+                    const raw = String(collection[name] ?? '');
                     return raw.trim() ? raw.split(',').map((item: string) => item.trim()).filter(Boolean) : undefined;
                 };
 
                 // Build the request body based on the operation
-                if (['listEventTypes', 'listEvents', 'listVenues', 'listMarketTypes', 'listCompetition', 'listMarketCatalogue'].includes(operation)) {
+                if (['listEventTypes', 'listEvents', 'listVenues', 'listMarketTypes', 'listCompetitions', 'listMarketCatalogue'].includes(operation)) {
 					const filterOptions = this.getNodeParameter('filters', itemIndex, {}) as any;
                     const filter: any = {};
 
@@ -248,7 +248,7 @@ export class BetfairAus implements INodeType {
 					}
 
                 } else if (operation === 'listMarketBook') {
-                    const marketIdsRaw = this.getNodeParameter('filterMarketIds', itemIndex, '') as string;
+                    const marketIdsRaw = String(this.getNodeParameter('filterMarketIds', itemIndex, '') ?? '');
 					const marketIds = marketIdsRaw.trim() ? marketIdsRaw.split(',').map(id => id.trim()).filter(Boolean) : undefined;
 
                     if (!marketIds || marketIds.length === 0) {
@@ -258,7 +258,8 @@ export class BetfairAus implements INodeType {
                     requestBody = { marketIds };
 
                     const priceProjection: any = {};
-                    if (options.priceProjectionPriceData) priceProjection.priceData = options.priceProjectionPriceData;
+                    const priceData = options.priceProjectionPriceData;
+                    priceProjection.priceData = Array.isArray(priceData) && priceData.length > 0 ? priceData : ['EX_BEST_OFFERS'];
                     if (options.priceProjectionVirtualise) priceProjection.virtualise = options.priceProjectionVirtualise;
                     if (options.priceProjectionExBestOffersDepth) priceProjection.exBestOffersOverrides = { bestPricesDepth: options.priceProjectionExBestOffersDepth };
                     if (Object.keys(priceProjection).length > 0) requestBody.priceProjection = priceProjection;
@@ -269,7 +270,7 @@ export class BetfairAus implements INodeType {
                 } else if (operation === 'listCurrentOrders') {
                     const options = this.getNodeParameter('currentOrdersOptions', itemIndex, {}) as any;
 					const getArrayParamOrders = (name: string) => {
-						const raw = options[name] || '';
+						const raw = String(options[name] ?? '');
 						return raw.trim() ? raw.split(',').map((item: string) => item.trim()).filter(Boolean) : undefined;
 					};
 
@@ -284,9 +285,9 @@ export class BetfairAus implements INodeType {
                     const placedDateFrom = options.currentOrdersPlacedDateFrom;
                     const placedDateTo = options.currentOrdersPlacedDateTo;
                     if (placedDateFrom || placedDateTo) {
-                        requestBody.placedDateRange = {};
-                        if(placedDateFrom) requestBody.placedDateRange.from = new Date(placedDateFrom).toISOString();
-                        if(placedDateTo) requestBody.placedDateRange.to = new Date(placedDateTo).toISOString();
+                        requestBody.dateRange = {};
+                        if(placedDateFrom) requestBody.dateRange.from = new Date(placedDateFrom).toISOString();
+                        if(placedDateTo) requestBody.dateRange.to = new Date(placedDateTo).toISOString();
                     }
                 } else {
                     throw new NodeOperationError(this.getNode(), `Unknown or unhandled operation '${operation}'`, { itemIndex });
@@ -299,7 +300,7 @@ export class BetfairAus implements INodeType {
                 const apiResponseData = response.data;
                 const results = Array.isArray(apiResponseData) ? apiResponseData : [apiResponseData];
                 if (results.length > 0 && results[0] !== null) {
-					returnData.push(...this.helpers.returnJsonArray(results));
+					returnData.push(...this.helpers.constructExecutionMetaData(this.helpers.returnJsonArray(results), { itemData: { item: itemIndex } }));
 				}
 
 

@@ -61,12 +61,11 @@ export class ToolBetfair implements INodeType {
 		const items = this.getInputData();
 		const results: INodeExecutionData[] = [];
 		for (let i = 0; i < items.length; i++) {
+			// The engine merges the agent's own input fields into the item, so only read the
+			// tool schema's `input` (plus the command/argument pair some models send).
 			const args = items[i].json as Record<string, unknown>;
-			const raw = [args.input, args.command, args.query].find((v) => typeof v === 'string' && v) as
-				| string
-				| undefined;
-			const argument = typeof args.argument === 'string' ? args.argument : undefined;
-			const text = raw && argument !== undefined && !raw.includes(':') ? `${raw}:${argument}` : raw;
+			const str = (v: unknown) => (typeof v === 'string' ? v.trim() : '');
+			const text = str(args.input) || (str(args.command) && str(args.argument) ? `${str(args.command)}:${str(args.argument)}` : str(args.command));
 			const response = text
 				? await tool.invoke(text)
 				: "Error: expected input like 'list_events:<event_type_id>'.";

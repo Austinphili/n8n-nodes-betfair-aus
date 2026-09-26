@@ -28,7 +28,7 @@ export async function betfairLogin(
 		}
 		throw new NodeOperationError(
 			getNode(),
-			`Betfair login failed: ${loginResponse.data?.error || loginResponse.data?.loginStatus || 'No token received'}`,
+			`Betfair login failed: ${loginResponse.data?.error || loginResponse.data?.status || 'No token received'}`,
 		);
 	} catch (error) {
 		if (error instanceof NodeOperationError) throw error;
@@ -48,6 +48,7 @@ export async function betfairApiRequest(
 	appKey: string,
 	sessionToken: string,
 	getNode: () => any,
+	timeoutMs = 15000,
 ): Promise<AxiosResponse> {
 	const options: AxiosRequestConfig = {
 		url: `${BETFAIR_API_BASE_URL_AU}${endpoint}`,
@@ -59,13 +60,12 @@ export async function betfairApiRequest(
 			'Accept': 'application/json',
 		},
 		data: body,
-		timeout: 15000,
+		timeout: timeoutMs,
 	};
 	try {
 		return await axios(options);
 	} catch (error) {
 		if (axios.isAxiosError(error) && error.response) {
-			console.error('Betfair API Error Response Data:', JSON.stringify(error.response.data, null, 2));
 			throw new NodeOperationError(
 				getNode(),
 				`Betfair API Error: ${JSON.stringify(error.response.data)} (Status: ${error.response.status})`,
