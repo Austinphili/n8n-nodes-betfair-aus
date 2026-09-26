@@ -8,7 +8,6 @@ import {
 import { createHash } from 'crypto';
 import { betfairApiRequest, betfairLogin } from './BetfairApiHelper';
 
-// Betfair de-duplicates placeOrders requests that reuse a customerRef (max 32 chars, ~60s window).
 const PLACE_ORDERS_TIMEOUT_MS = 45000;
 
 export class BetfairAusPlaceBet implements INodeType {
@@ -103,7 +102,7 @@ export class BetfairAusPlaceBet implements INodeType {
                 description: 'Refuse to place any bet with a stake above this. 0 disables the limit.',
             },
             {
-                displayName: 'Max Lay Liability ($)',
+                displayName: 'Max Worst-Case Loss ($)',
                 name: 'maxLiability',
                 type: 'number',
                 default: 50,
@@ -144,17 +143,29 @@ export class BetfairAusPlaceBet implements INodeType {
 
         // SAFETY CHECKS run for every item before anything is sent to Betfair, so a bad
         // item cannot leave earlier items already placed.
-        if (!(this.getNodeParameter('confirmPlacement', 0) as boolean)) {
+        const dryRun = this.getNodeParameter('dryRun', 0, false) as boolean;
+        // Read the raw stored value: an expression such as "={{true}}" is not an explicit tick.
+        if (!dryRun && node.parameters.confirmPlacement !== true) {
             throw new NodeOperationError(node, 'Bet placement not confirmed. You must tick the "Confirm Bet Placement" box to execute this node.');
         }
-        const dryRun = this.getNodeParameter('dryRun', 0, false) as boolean;
-        const maxBets = this.getNodeParameter('maxBets', 0, 5) as number;
+        // Only an explicit 0 turns a limit off; anything non-numeric is an error, not "no limit".
+        const readLimit = (name: string, label: string, fallback: number, i: number): number => {
+            const value = Number(this.getNodeParameter(name, i, fallback));
+            if (!Number.isFinite(value) || value < 0) {
+                throw new NodeOperationError(node, `Invalid "${label}" value. Nothing was placed.`, { itemIndex: i });
+            }
+            return value;
+        };
+        const maxBets = readLimit('maxBets', 'Max Bets per Execution', 5, 0);
         if (maxBets > 0 && items.length > maxBets) {
             throw new NodeOperationError(
                 node,
                 `Refusing to run: ${items.length} items received but "Max Bets per Execution" is ${maxBets}. Nothing was placed.`,
             );
         }
+        // Distinguishes separate runs of this node in one execution (e.g. inside Loop Over Items),
+        // while staying identical across an n8n Retry On Fail of the same run.
+        const runIndex = this.getWorkflowDataProxy(0).$runIndex;
 
         const orders = items.map((_, i) => {
             const marketId = String(this.getNodeParameter('marketId', i)).trim();
@@ -163,8 +174,8 @@ export class BetfairAusPlaceBet implements INodeType {
             const price = Number(this.getNodeParameter('price', i));
             const size = Number(this.getNodeParameter('size', i));
             const customerStrategyRef = String(this.getNodeParameter('customerStrategyRef', i)).trim();
-            const maxStake = this.getNodeParameter('maxStake', i, 10) as number;
-            const maxLiability = this.getNodeParameter('maxLiability', i, 50) as number;
+            const maxStake = readLimit('maxStake', 'Max Stake', 10, i);
+            const maxLiability = readLimit('maxLiability', 'Max Worst-Case Loss', 50, i);
             const fail = (msg: string) => new NodeOperationError(node, `${msg} Nothing was placed.`, { itemIndex: i });
 
             if (!/^\d\.\d+$/.test(marketId)) throw fail(`Invalid Market ID "${marketId}" (expected e.g. 1.12345678).`);
@@ -176,13 +187,13 @@ export class BetfairAusPlaceBet implements INodeType {
             const liability = side === 'LAY' ? size * (price - 1) : size;
             if (maxStake > 0 && size > maxStake) throw fail(`Stake $${size} exceeds "Max Stake" $${maxStake}.`);
             if (maxLiability > 0 && liability > maxLiability) {
-                throw fail(`Worst-case loss $${liability.toFixed(2)} exceeds "Max Lay Liability" $${maxLiability}.`);
+                throw fail(`Worst-case loss $${liability.toFixed(2)} exceeds "Max Worst-Case Loss" $${maxLiability}.`);
             }
 
-            // Same execution + node + item always yields the same ref, so an n8n retry of this
-            // node cannot double-place a bet Betfair already accepted.
+            // Same execution + node + run + item always yields the same ref, so an in-execution n8n
+            // Retry On Fail cannot double-place a bet Betfair already accepted (Betfair de-dupes ~60s).
             const customerRef = createHash('sha1')
-                .update(`${this.getExecutionId()}:${node.id}:${i}`)
+                .update(`${this.getExecutionId()}:${node.id}:${runIndex}:${i}`)
                 .digest('hex')
                 .slice(0, 32);
 
@@ -214,7 +225,9 @@ export class BetfairAusPlaceBet implements INodeType {
         const appKey = credentials.appKey as string;
         const sessionToken = await betfairLogin(appKey, credentials.username as string, credentials.password as string, () => this.getNode());
 
+        const UNKNOWN = ' Outcome is UNKNOWN - check your Betfair account before retrying.';
         for (let i = 0; i < orders.length; i++) {
+            let definite = false; // true only when Betfair definitively refused the order
             try {
                 const response = await betfairApiRequest('placeOrders/', orders[i], appKey, sessionToken, () => this.getNode(), PLACE_ORDERS_TIMEOUT_MS);
                 const data = response.data;
@@ -222,21 +235,40 @@ export class BetfairAusPlaceBet implements INodeType {
                 // Betfair returns HTTP 200 for rejected or unknown-outcome orders; only SUCCESS means placed.
                 if (data?.status !== 'SUCCESS') {
                     const reportError = data?.instructionReports?.[0]?.errorCode;
-                    const detail = [data?.errorCode, reportError].filter(Boolean).join(' / ') || 'no error code';
-                    const unknown = data?.status === 'TIMEOUT'
-                        ? ' Outcome is UNKNOWN - check your Betfair account before retrying.'
-                        : '';
+                    const codes = [data?.errorCode, reportError].filter(Boolean);
+
+                    // Same customerRef seen before: an earlier attempt of this order already reached Betfair.
+                    if (codes.includes('DUPLICATE_TRANSACTION')) {
+                        returnData.push({
+                            json: { placed: null, duplicate: true, message: 'Order already submitted in this execution - check your Betfair account.', response: data },
+                            pairedItem: { item: i },
+                        });
+                        continue;
+                    }
+
+                    definite = data?.status !== 'TIMEOUT';
                     throw new NodeOperationError(
                         this.getNode(),
-                        `Betfair did not place the bet (status ${data?.status}: ${detail}).${unknown}`,
+                        `Betfair did not place the bet (status ${data?.status}: ${codes.join(' / ') || 'no error code'}).${definite ? '' : UNKNOWN}`,
                         { itemIndex: i },
                     );
                 }
 
                 returnData.push({ json: { ...data, placed: true }, pairedItem: { item: i } });
             } catch (error) {
+                const kind = (error as any).betfairKind as string | undefined;
+                if (kind === 'api') definite = true; // 4xx APINGException: refused
+                const unknown = !definite;
+                if (unknown && kind && !(error as Error).message.includes('UNKNOWN')) {
+                    (error as Error).message += UNKNOWN;
+                }
                 if (this.continueOnFail()) {
-                    returnData.push({ json: { placed: false, error: (error as Error).message }, pairedItem: { item: i } });
+                    returnData.push({
+                        json: unknown
+                            ? { placed: null, outcomeUnknown: true, error: (error as Error).message }
+                            : { placed: false, error: (error as Error).message },
+                        pairedItem: { item: i },
+                    });
                     continue;
                 }
                 throw error;

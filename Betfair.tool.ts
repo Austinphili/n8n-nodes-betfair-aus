@@ -50,7 +50,7 @@ export class BetfairTool extends Tool {
 				body: { marketIds: [arg], priceProjection: { priceData: ['EX_BEST_OFFERS'] } },
 			}),
 		};
-		if (!commands[command]) {
+		if (!Object.prototype.hasOwnProperty.call(commands, command)) {
 			return `Unknown command '${command}'. Valid commands are: list_events, list_market_catalogue, list_market_book.`;
 		}
 		if (!argument) {

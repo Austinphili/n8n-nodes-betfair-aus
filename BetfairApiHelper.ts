@@ -66,11 +66,17 @@ export async function betfairApiRequest(
 		return await axios(options);
 	} catch (error) {
 		if (axios.isAxiosError(error) && error.response) {
-			throw new NodeOperationError(
+			const err = new NodeOperationError(
 				getNode(),
 				`Betfair API Error: ${JSON.stringify(error.response.data)} (Status: ${error.response.status})`,
 			);
+			// 4xx = Betfair definitively refused the request; 5xx may have been processed.
+			(err as any).betfairKind = error.response.status >= 500 ? 'http' : 'api';
+			throw err;
 		}
-		throw new NodeOperationError(getNode(), `Betfair API Request Failed: ${(error as Error).message}`);
+		// No response (timeout, connection reset): the request may or may not have been processed.
+		const err = new NodeOperationError(getNode(), `Betfair API Request Failed: ${(error as Error).message}`);
+		(err as any).betfairKind = 'network';
+		throw err;
 	}
 }
